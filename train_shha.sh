@@ -1,0 +1,1 @@
+python train.py --data-dir ./data/SHHA_Bayes --save-dir ./results --batch-size 16 --val-start 200 --num-workers 8 --max-epoch 500
