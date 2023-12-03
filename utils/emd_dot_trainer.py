@@ -120,11 +120,13 @@ class EMDTrainer(Trainer):
         self.best_mae_list = []
         self.best_mae = {}
         self.best_mse = {}
-        self.best_epoch = {}
+        self.best_mae_epoch = {}
+        self.best_mse_epoch = {}
         for stage in ['train', 'val']:
             self.best_mae[stage] = np.inf
             self.best_mse[stage] = np.inf
-            self.best_epoch[stage] = 0
+            self.best_mae_epoch[stage] = 0
+            self.best_mse_epoch[stage] = 0
 
     def train(self):
         """training process"""
@@ -251,22 +253,28 @@ class EMDTrainer(Trainer):
         self.writer.add_scalar(stage+'/mae', mae, self.epoch)
         self.writer.add_scalar(stage+'/mse', mse, self.epoch)
         logging.info('{} Epoch {}, MSE: {:.2f} MAE: {:.2f}, Cost {:.1f} sec'
-                     .format(stage, self.epoch, mse, mae, time.time()-epoch_start))
+                     .format(stage, self.epoch, mse, mae, time.time() - epoch_start))
 
         model_state_dic = self.model.state_dict()
 
-        if ( mae) < ( self.best_mae[stage]):
-            self.best_mse[stage] = mse
-            self.best_mae[stage] = mae
-            self.best_epoch[stage] = self.epoch 
+        if (mae) < (self.best_mae[stage]) or mse < self.best_mse[stage]:
+            if mse < self.best_mse[stage]:
+                self.best_mse[stage] = mse
+                self.best_mse_epoch[stage] = self.epoch
+            if mae < self.best_mae[stage]:
+                self.best_mae[stage] = mae
+                self.best_mae_epoch[stage] = self.epoch
+
             logging.info("{} save best mse {:.2f} mae {:.2f} model epoch {}".format(stage,
                                                                             self.best_mse[stage],
                                                                             self.best_mae[stage],
                                                                                  self.epoch))
             torch.save(model_state_dic, os.path.join(self.save_dir, 'best_{}.pth').format(stage))
+
+
         # print log info
-        logging.info('Val: Best Epoch {} Val, MSE: {:.2f} MAE: {:.2f}, Cost {:.1f} sec'
-                     .format(self.best_epoch['val'], self.best_mse['val'], self.best_mae['val'], time.time()-epoch_start))
+        logging.info('Val: Best_MAE Epoch {}, Best_MSE Epoch {}, Val, Best_MSE: {:.2f} Best_MAE: {:.2f}, Cost {:.1f} sec'
+                     .format(self.best_mae_epoch['val'], self.best_mse_epoch['val'], self.best_mse['val'], self.best_mae['val'], time.time()-epoch_start))
 
 
 
