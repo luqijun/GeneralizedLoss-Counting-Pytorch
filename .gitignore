@@ -10,3 +10,7 @@
 .runs/*
 *.condor
 *.sh
+
+results
+data
+.idea
