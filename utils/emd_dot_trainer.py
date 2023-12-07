@@ -21,6 +21,8 @@ from models.vgg import vgg19
 from datasets.crowd import Crowd, train_val, get_im_list
 from geomloss import SamplesLoss
 import inspect
+from models.layers import Gaussianlayer
+from utils.utils import save_results_more
 
 print(inspect.getfile(SamplesLoss))
 
@@ -55,10 +57,12 @@ def train_collate(batch):
     points = transposed_batch[1]  # the number of points is not fixed, keep it as a list of tensor
     targets = transposed_batch[2]
     st_sizes = torch.FloatTensor(transposed_batch[3])
-    return images, points, targets, st_sizes
+    point_maps = [torch.stack(labels, 0) for labels in zip(*transposed_batch[4])]
+    return images, points, targets, st_sizes, point_maps
 
 
 class EMDTrainer(Trainer):
+    
     def setup(self):
         """initial the datasets, model, loss and optimizer"""
         args = self.args
@@ -68,6 +72,10 @@ class EMDTrainer(Trainer):
             self.cost = exp_cost
         elif args.cost == 'per':
             self.cost = per_cost
+        
+        sigma = [4]
+        gau_kernel_size = 15
+        
 
         if torch.cuda.is_available():
             self.device = torch.device("cuda")
@@ -94,6 +102,7 @@ class EMDTrainer(Trainer):
                                           pin_memory=(True if x == 'train' else False), drop_last=True)
                             for x in ['train', 'val']}
 
+        self.gaussian = Gaussianlayer(sigma, gau_kernel_size).to(self.device)
         self.model = vgg19()
 
         self.model.to(self.device)
@@ -127,6 +136,12 @@ class EMDTrainer(Trainer):
             self.best_mse[stage] = np.inf
             self.best_mae_epoch[stage] = 0
             self.best_mse_epoch[stage] = 0
+              
+        self.vis_dir_train = os.path.join(self.save_dir, 'vis_train')
+        self.vis_dir_val = os.path.join(self.save_dir, 'vis_val')
+        os.makedirs(self.vis_dir_train, exist_ok=True)
+        os.makedirs(self.vis_dir_val, exist_ok=True)
+        
 
     def train(self):
         """training process"""
@@ -145,25 +160,32 @@ class EMDTrainer(Trainer):
         epoch_start = time.time()
         self.model.train()  # Set model to training mode
         shape = (1,int(512/self.args.downsample_ratio),int(512/self.args.downsample_ratio))
-
+        
+        iter = 0
+        save_interval = len(self.dataloaders['train']) // 10
+        
         if epoch < 10:
             for param_group in self.optimizer.param_groups:
                 if param_group['lr'] >= 0.1*self.args.lr:
                     param_group['lr'] = self.args.lr * (epoch + 1) / 10
         print('learning rate: {}, batch size: {}'.format(self.optimizer.param_groups[0]['lr'], self.args.batch_size))
-        for step, (inputs, points, targets, st_sizes) in enumerate(self.dataloaders['train']):
+        for step, (inputs, points, targets, st_sizes, point_maps) in enumerate(self.dataloaders['train']):
+            iter += 1
             inputs = inputs.to(self.device)
             st_sizes = st_sizes.to(self.device)
             gd_count = np.array([len(p) for p in points], dtype=np.float32)
             points = [p.to(self.device) for p in points]
             targets = [t.to(self.device) for t in targets]
+            point_maps = [p.to(self.device) for p in point_maps]
             shape = (inputs.shape[0],int(inputs.shape[2]/self.args.downsample_ratio),int(inputs.shape[3]/self.args.downsample_ratio))
 
             with torch.autograd.set_grad_enabled(True):
 
                 outputs = self.model(inputs)
+                pre_seg = outputs['pre_seg']
+                pre_den = outputs['pre_den']
                 
-                cood_grid = grid(outputs.shape[2], outputs.shape[3], 1).unsqueeze(0) * self.args.downsample_ratio + (self.args.downsample_ratio / 2)
+                cood_grid = grid(pre_den.shape[2], pre_den.shape[3], 1).unsqueeze(0) * self.args.downsample_ratio + (self.args.downsample_ratio / 2)
                 cood_grid = cood_grid.type(torch.cuda.FloatTensor) / float(self.args.crop_size)
                 i = 0
                 emd_loss = 0
@@ -173,17 +195,17 @@ class EMDTrainer(Trainer):
                 for p in points:
                     if len(p) < 1:
                         gt = torch.zeros((1, shape[1], shape[2])).cuda()
-                        point_loss += torch.abs(gt.sum() - outputs[i].sum()) / shape[0]
-                        pixel_loss += torch.abs(gt.sum() - outputs[i].sum()) / shape[0]
-                        emd_loss += torch.abs(gt.sum() - outputs[i].sum()) / shape[0]
+                        point_loss += torch.abs(gt.sum() - pre_den[i].sum()) / shape[0]
+                        pixel_loss += torch.abs(gt.sum() - pre_den[i].sum()) / shape[0]
+                        emd_loss += torch.abs(gt.sum() - pre_den[i].sum()) / shape[0]
                     else:
                         gt = torch.ones((1, len(p), 1)).cuda()
                         cood_points = p.reshape(1, -1, 2) / float(self.args.crop_size) 
-                        A = outputs[i].reshape(1, -1, 1)
-                        l, F, G = self.criterion(A, cood_grid, gt, cood_points)
+                        A = pre_den[i].reshape(1, -1, 1)
+                        l, F_, G = self.criterion(A, cood_grid, gt, cood_points)
 
                         C = self.cost(cood_grid, cood_points)
-                        PI = torch.exp((F.repeat(1,1,C.shape[2])+G.permute(0,2,1).repeat(1,C.shape[1],1)-C).detach()/self.args.blur**self.args.p)*A*gt.permute(0,2,1)
+                        PI = torch.exp((F_.repeat(1,1,C.shape[2])+G.permute(0,2,1).repeat(1,C.shape[1],1)-C).detach()/self.args.blur**self.args.p)*A*gt.permute(0,2,1)
                         entropy += torch.mean((1e-20+PI) * torch.log(1e-20+PI))
                         AE = PI
                         AE = AE.sum(1).reshape(1,-1,1)
@@ -199,6 +221,17 @@ class EMDTrainer(Trainer):
                     i += 1
 
                 loss = emd_loss + self.args.tau*(pixel_loss + point_loss) + self.blur*entropy
+                
+                # 分割图损失
+                th_seg = 1e-5
+                point_map = point_maps[-1]
+                gau_map = self.gaussian(point_map.unsqueeze(1)) # * self.weight???
+                fg_mask_gt = torch.where(gau_map > th_seg, 1, 0)
+                
+                amp_pre = pre_seg.view(pre_seg.shape[0], -1) # self.sgm(pre_den[i]) ????
+                amp_gt = fg_mask_gt.view(fg_mask_gt.shape[0], -1)
+                ce_loss = F.binary_cross_entropy_with_logits(amp_pre, amp_gt.float())
+                loss += torch.mean(ce_loss)
 
 
                 self.optimizer.zero_grad()
@@ -206,8 +239,8 @@ class EMDTrainer(Trainer):
                 self.optimizer.step()
 
                 N = inputs.size(0)
-                outputs = torch.mean(outputs, dim=1)
-                pre_count = torch.sum(outputs[-1]).detach().cpu().numpy()
+                pre_den = torch.mean(pre_den, dim=1)
+                pre_count = torch.sum(pre_den[-1]).detach().cpu().numpy()
                 res = (pre_count - gd_count[-1]) #gd_count
                 if step % 200 == 0:
                     print(res, pre_count, gd_count[-1], point_loss.item(), pixel_loss.item(), loss.item())
@@ -215,6 +248,9 @@ class EMDTrainer(Trainer):
                 epoch_mse.update(np.mean(res * res), N)
                 epoch_mae.update(np.mean(abs(res)), N)
 
+                if iter % save_interval == 0:
+                    save_results_more(iter, self.vis_dir_train, inputs[-1], pre_den.unsqueeze(1)[-1], gau_map[-1], pre_count, gd_count[-1])
+            
         logging.info('Epoch {} Train, Loss: {:.2f}, MSE: {:.2f} MAE: {:.2f}, Cost {:.1f} sec'
                 .format(self.epoch, epoch_loss.get_avg(), np.sqrt(epoch_mse.get_avg()), epoch_mae.get_avg(),
                     time.time()-epoch_start))
@@ -234,18 +270,31 @@ class EMDTrainer(Trainer):
         epoch_res = []
         epoch_fore = []
         epoch_back = []
+        
+        iter = 0
+        save_interval = len(self.dataloaders['val']) // 20
         # Iterate over data.
         if stage == 'val':
             dataloader = self.dataloaders['val']
         for inputs, points, name in dataloader:
+            iter += 1
             inputs = inputs.to(self.device)
             # inputs are images with different sizes
             assert inputs.size(0) == 1, 'the batch size should equal to 1 in validation mode'
             with torch.set_grad_enabled(False):
                 outputs = self.model(inputs)
+                pre_seg = outputs['pre_seg']
+                pre_den = outputs['pre_den']
                 points = points[0].type(torch.LongTensor)
-                res = len(points) - torch.sum(outputs).item()
+                
+                pre_count = torch.sum(pre_den).item()
+                gt_count = len(points)
+                res = gt_count - pre_count
                 epoch_res.append(res)
+                
+                th_seg = 1e-5
+                if iter % save_interval == 0:
+                    save_results_more(iter, self.vis_dir_val, inputs[-1], pre_den[-1], (pre_seg>th_seg).int()[-1], pre_count, gt_count)
 
         epoch_res = np.array(epoch_res)
         mse = np.sqrt(np.mean(np.square(epoch_res)))

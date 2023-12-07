@@ -127,5 +127,43 @@ class Crowd(data.Dataset):
         else:
             if random.random() > 0.5:
                 img = F.hflip(img)
+
+        point_maps = self.label_transform(keypoints, (c_size, c_size))
         return self.trans(img), torch.from_numpy(keypoints.copy()).float(), \
-               torch.from_numpy(target.copy()).float(), st_size
+               torch.from_numpy(target.copy()).float(), st_size, point_maps
+               
+               
+    
+    def label_transform(self, points, shape):
+
+        label = np.zeros(shape).astype('float32')
+        labelx2= np.zeros((shape[0]//2,shape[1]//2)).astype('float32')
+        labelx4 = np.zeros((shape[0]//4,shape[1]//4)).astype('float32')
+        labelx8 = np.zeros((shape[0]//8,shape[1]//8)).astype('float32')
+
+        # index = np.round(points).astype('int32')
+        # index[:, 0]=np.clip(index[:, 0], 0,  shape[1]-1)
+        # index[:, 1] = np.clip(index[:, 1], 0, shape[0]-1)
+
+        for i in range(points.shape[0]):
+            point = points[i]
+            w_idx = np.clip(int(point[0].round()), 0, shape[1] - 1)
+            h_idx = np.clip(int(point[1].round()), 0, shape[0] - 1)
+            label [h_idx,w_idx] +=1
+
+            w_idx = np.clip(int((point[0]/2).round()), 0, shape[1]//2 - 1)
+            h_idx = np.clip(int((point[1]/2).round()), 0, shape[0]//2 - 1)
+            labelx2[h_idx, w_idx] += 1
+
+            w_idx = np.clip(int((point[0]/4).round()), 0, shape[1]//4 - 1)
+            h_idx = np.clip(int((point[1]/4).round()), 0, shape[0]//4 - 1)
+            labelx4[h_idx, w_idx] += 1
+
+            w_idx = np.clip(int((point[0]/8).round()), 0, shape[1]//8 - 1)
+            h_idx = np.clip(int((point[1]/8).round()), 0, shape[0]//8 - 1)
+            labelx8[h_idx, w_idx] += 1
+
+
+        # import pdb
+        # pdb.set_trace()
+        return [torch.from_numpy(label), torch.from_numpy(labelx2), torch.from_numpy(labelx4), torch.from_numpy(labelx8)]
