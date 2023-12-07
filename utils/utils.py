@@ -7,26 +7,39 @@ import numpy as np
 import os
 
 
-def save_results_more(iter, exp_path, img0, pre_map0, gt_map0, pre_cnt, gt_cnt, pre_points=None,gt_points=None):  # , flow):
+def save_results_more(iter, exp_path, img0, pre_map0, gt_map0, pre_cnt, gt_cnt, pre_points=None,gt_points=None, pre_seg_map0=None, gt_seg_map0=None):  # , flow):
     # gt_cnt = gt_map0.sum().item()
     # pre_cnt = pre_map0.sum().item()
     pil_to_tensor = standard_transforms.ToTensor()
     tensor_to_pil = standard_transforms.ToPILImage()
     
+    UNIT_H , UNIT_W = img0.size(1), img0.size(2)
+    
     img0 = img0.detach().to('cpu')
     pre_map0 = pre_map0.detach().to('cpu')
     gt_map0 = gt_map0.detach().to('cpu')
-
-    UNIT_H , UNIT_W = img0.size(1), img0.size(2)
+    
     pre_map0 =  F.interpolate(pre_map0.unsqueeze(0),size=(UNIT_H,UNIT_W)).squeeze(0).numpy()
     gt_map0  =  F.interpolate(gt_map0.unsqueeze(0),size=(UNIT_H,UNIT_W)).squeeze(0).numpy()
-
+    
     tensor = [img0, gt_map0, pre_map0]
-
+    
+    # 插值分割图
+    if gt_seg_map0 is not None: 
+        gt_seg_map0 = gt_seg_map0.float().detach().to('cpu')
+        gt_seg_map0 =  F.interpolate(gt_seg_map0.unsqueeze(0),size=(UNIT_H,UNIT_W)).squeeze(0).numpy()
+    if pre_seg_map0 is not None: 
+        pre_seg_map0 = pre_seg_map0.float().detach().to('cpu')
+        pre_seg_map0 =  F.interpolate(pre_seg_map0.unsqueeze(0),size=(UNIT_H,UNIT_W)).squeeze(0).numpy()
+    
+    
     pil_input0 = tensor_to_pil(tensor[0])
 
     gt_color_map = cv2.applyColorMap((255 * tensor[1] / (tensor[1].max() + 1e-10)).astype(np.uint8).squeeze(), cv2.COLORMAP_JET)
-    pred_color_map = cv2.applyColorMap((255 * tensor[2] / (tensor[2].max() + 1e-10)).astype(np.uint8).squeeze(), cv2.COLORMAP_JET)
+    pre_color_map = cv2.applyColorMap((255 * tensor[2] / (tensor[2].max() + 1e-10)).astype(np.uint8).squeeze(), cv2.COLORMAP_JET)
+    
+    gt_seg_map = None if gt_seg_map0 is None else gt_seg_map0.astype(np.uint8).squeeze(0) * 255
+    pre_seg_map = None if pre_seg_map0 is None else pre_seg_map0.astype(np.uint8).squeeze(0) * 255 
 
 
     # mask_color_map = cv2.applyColorMap((255 * tensor[8]).astype(np.uint8).squeeze(), cv2.COLORMAP_JET)
@@ -51,7 +64,7 @@ def save_results_more(iter, exp_path, img0, pre_map0, gt_map0, pre_cnt, gt_cnt, 
             point = point.astype(np.int32)
             point = (point[0], point[1])
             cv2.drawMarker(pil_input0, point, RGB_G, markerType=cv2.MARKER_CROSS,markerSize=15,thickness=3)
-            cv2.circle(pred_color_map, point,2, BGR_R,thickness)
+            cv2.circle(pre_color_map, point,2, BGR_R,thickness)
             # cv2.drawMarker(pil_input0, point, RGB_R, markerType=cv2.MARKER,markerSize=20,thickness=3)
 
     if gt_points is not None:
@@ -63,16 +76,26 @@ def save_results_more(iter, exp_path, img0, pre_map0, gt_map0, pre_cnt, gt_cnt, 
 
     cv2.putText(gt_color_map, 'GT:'+str(gt_cnt), (100,150), cv2.FONT_HERSHEY_SIMPLEX,
                 3, (255,255,255),thickness=2)
-    cv2.putText(pred_color_map, 'Pre:'+str(np.round(pre_cnt,1)), (100, 150),cv2.FONT_HERSHEY_SIMPLEX,
+    cv2.putText(pre_color_map, 'Pre:'+str(np.round(pre_cnt,1)), (100, 150),cv2.FONT_HERSHEY_SIMPLEX,
                 3, (255,255,255), thickness=2)
     pil_input0 = Image.fromarray(pil_input0)
 
     pil_label0 = Image.fromarray(cv2.cvtColor(gt_color_map, cv2.COLOR_BGR2RGB))
-    pil_output0 = Image.fromarray(cv2.cvtColor(pred_color_map, cv2.COLOR_BGR2RGB))
+    pil_output0 = Image.fromarray(cv2.cvtColor(pre_color_map, cv2.COLOR_BGR2RGB))
 
     imgs = [pil_input0, pil_label0, pil_output0]
 
-    w_num , h_num=1, 3
+    # 显示分割图
+    if gt_seg_map is not None:
+        # cv2.putText(gt_seg_map, 'GT', (100,150), cv2.FONT_HERSHEY_SIMPLEX, 3, RGB_R, thickness=2)
+        pil_gt_seg0 = Image.fromarray(gt_seg_map)
+        imgs.append(pil_gt_seg0)
+    if pre_seg_map is not None:
+        # cv2.putText(pre_seg_map, 'Pre', (100,150), cv2.FONT_HERSHEY_SIMPLEX, 3, RGB_R, thickness=2)
+        pil_pre_seg0 = Image.fromarray(pre_seg_map)
+        imgs.append(pil_pre_seg0)
+
+    w_num , h_num=3, 2
 
     target_shape = (w_num * (UNIT_W + 10), h_num * (UNIT_H + 10))
     target = Image.new('RGB', target_shape)

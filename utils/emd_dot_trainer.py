@@ -17,7 +17,7 @@ from torch.optim.lr_scheduler import StepLR
 import logging
 import numpy as np
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
-from models.vgg import vgg19
+from models import vgg19
 from datasets.crowd import Crowd, train_val, get_im_list
 from geomloss import SamplesLoss
 import inspect
@@ -103,7 +103,7 @@ class EMDTrainer(Trainer):
                             for x in ['train', 'val']}
 
         self.gaussian = Gaussianlayer(sigma, gau_kernel_size).to(self.device)
-        self.model = vgg19()
+        self.model = vgg19(model_name=args.model_name)
 
         self.model.to(self.device)
         self.optimizer = optim.Adam(self.model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
@@ -222,16 +222,18 @@ class EMDTrainer(Trainer):
 
                 loss = emd_loss + self.args.tau*(pixel_loss + point_loss) + self.blur*entropy
                 
-                # 分割图损失
+                # 生成高斯密度图和分割图
                 th_seg = 1e-5
                 point_map = point_maps[-1]
                 gau_map = self.gaussian(point_map.unsqueeze(1)) # * self.weight???
                 fg_mask_gt = torch.where(gau_map > th_seg, 1, 0)
                 
-                amp_pre = pre_seg.view(pre_seg.shape[0], -1) # self.sgm(pre_den[i]) ????
-                amp_gt = fg_mask_gt.view(fg_mask_gt.shape[0], -1)
-                ce_loss = F.binary_cross_entropy_with_logits(amp_pre, amp_gt.float())
-                loss += torch.mean(ce_loss)
+                if pre_seg is not None:
+                    # 计算分割图损失
+                    amp_pre = pre_seg.view(pre_seg.shape[0], -1) # self.sgm(pre_den[i]) ????
+                    amp_gt = fg_mask_gt.view(fg_mask_gt.shape[0], -1)
+                    ce_loss = F.binary_cross_entropy_with_logits(amp_pre, amp_gt.float()) # 使用logits不需要对输入数据做sigmod操作了
+                    loss += torch.mean(ce_loss)
 
 
                 self.optimizer.zero_grad()
@@ -249,7 +251,9 @@ class EMDTrainer(Trainer):
                 epoch_mae.update(np.mean(abs(res)), N)
 
                 if iter % save_interval == 0:
-                    save_results_more(iter, self.vis_dir_train, inputs[-1], pre_den.unsqueeze(1)[-1], gau_map[-1], pre_count, gd_count[-1])
+                    seg_map = torch.zeros_like(gau_map[-1]) if pre_seg is None else (pre_seg > th_seg)[-1]
+                    save_results_more(iter, self.vis_dir_train, inputs[-1], pre_den.unsqueeze(1)[-1], gau_map[-1], pre_count, gd_count[-1], 
+                                      pre_seg_map0=seg_map, gt_seg_map0= fg_mask_gt[-1])
             
         logging.info('Epoch {} Train, Loss: {:.2f}, MSE: {:.2f} MAE: {:.2f}, Cost {:.1f} sec'
                 .format(self.epoch, epoch_loss.get_avg(), np.sqrt(epoch_mse.get_avg()), epoch_mae.get_avg(),
@@ -272,7 +276,7 @@ class EMDTrainer(Trainer):
         epoch_back = []
         
         iter = 0
-        save_interval = len(self.dataloaders['val']) // 20
+        save_interval = len(self.dataloaders['val']) // 10
         # Iterate over data.
         if stage == 'val':
             dataloader = self.dataloaders['val']
@@ -294,7 +298,9 @@ class EMDTrainer(Trainer):
                 
                 th_seg = 1e-5
                 if iter % save_interval == 0:
-                    save_results_more(iter, self.vis_dir_val, inputs[-1], pre_den[-1], (pre_seg>th_seg).int()[-1], pre_count, gt_count)
+                    gt_map = torch.zeros_like(pre_den[-1])
+                    seg_map = torch.zeros_like(pre_den[-1]) if pre_seg is None else (pre_seg > th_seg)[-1]
+                    save_results_more(iter, self.vis_dir_val, inputs[-1], pre_den[-1], gt_map, pre_count, gt_count, pre_seg_map0=seg_map, gt_seg_map0=gt_map)
 
         epoch_res = np.array(epoch_res)
         mse = np.sqrt(np.mean(np.square(epoch_res)))

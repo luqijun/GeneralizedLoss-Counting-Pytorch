@@ -12,6 +12,15 @@
             "args": "--data-dir ./data/SHHB_Bayes --save-dir ./results --batch-size 8 --val-start 0 --num-workers 1",
             "console": "integratedTerminal",
             "justMyCode": true
+        },
+        {
+            "name": "Python: train_sim_match_shhb",
+            "type": "python",
+            "request": "launch",
+            "program": "train.py",
+            "args": "--model-name VGG_Sim_Match --data-dir ./data/SHHB_Bayes --save-dir ./results --batch-size 8 --val-start 0 --num-workers 1",
+            "console": "integratedTerminal",
+            "justMyCode": true
         }
     ]
 }

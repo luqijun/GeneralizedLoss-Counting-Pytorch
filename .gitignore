@@ -9,7 +9,7 @@
 /loc/*
 .runs/*
 *.condor
-*.sh
+# *.sh
 
 results
 data

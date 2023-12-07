@@ -6,6 +6,8 @@ args = None
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Train ')
+    parser.add_argument('--model-name', type=str, default='VGG',
+                        help='model to use')
     parser.add_argument('--save-dir', default='../checkpoints/temp',
                         help='directory to save models.')
     parser.add_argument('--data-dir', default='../../data/UCF_Bayes',

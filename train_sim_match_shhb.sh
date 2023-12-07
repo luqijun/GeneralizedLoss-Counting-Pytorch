@@ -1,0 +1,1 @@
+python train.py --model-name VGG_Sim_Match --data-dir ./data/SHHB_Bayes --save-dir ./results/VGG_Sim_Match --batch-size 24 --val-start 200 --num-workers 8
